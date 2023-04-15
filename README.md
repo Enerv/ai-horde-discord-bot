@@ -73,8 +73,11 @@ Use the following command, where `Clyde` is the name of your config file from `b
 ```
 npm start -- --tag=Clyde --inspect --endpoint=http://127.0.0.1:5000
 ```
-`--inspect` is optional, it displays information about sent payload and received response in console.
-`--endpoint` is optional, allows self-hosting instead of sending a request to AI Horde.
+### Optional parameters
+Name | Description
+--- | ---
+`inspect` | It displays information about sent payload and received response in console.
+`endpoint` | Allows self-hosting instead of sending a request to AI Horde.
 
 * If endpoint is reachable, requests are processed on your endpoint otherwise requests are moved to AI Horde.
 * You can run multiple bots by specifying different configuration files with parameters on the same package.
