@@ -40,6 +40,62 @@ await db.migrate.latest();
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages], partials: [Partials.Channel] });
 const RequestType = { Processing: 0, Finished: 1, Faulted: 2 };
+const tasks = [];
+
+const processTask = async () => {
+    if (tasks.length > 0) {
+        const task = tasks.shift();
+        await task();
+            
+        if (tasks.length > 0) {
+            console.log(`There are ${tasks.length} request(s) left to process from endpoint.`);
+        } else {
+            console.log('There are no request to process from endpoint.');
+        }
+    }
+
+    setTimeout(processTask, tasks.length > 0 ? 0 : 1000);
+};
+
+const sendResponse = async (data) => {
+    if (params.inspect) {
+        console.log(data);
+    }
+
+    const channel = await client.channels.fetch(data.channel).catch(() => null);
+    
+    let message;
+    try {
+        message = await channel.messages.fetch(data.message);
+    } catch {
+        await db('messages').where({ id: data.message }).del();
+        return;
+    }
+
+    let response;
+    if (channel.type === ChannelType.DM) {
+        try {
+            response = await channel.send(data.content);
+        } catch {
+            return;
+        }
+    } else {
+        try {
+            response = await message.reply(data.content);
+        } catch {
+            const user = await client.users.fetch(data.user).catch(() => null);
+            if (!user) return;
+
+            try {
+                response = await user.send(data.content);
+            } catch {
+                return;
+            }
+        }
+    }
+
+    await db('messages').insert({ id: response.id, bot: 1, user: data.user, content: data.content });
+};
 
 const fetchData = async (left = 0) => {
     const startTime = Date.now();
@@ -47,9 +103,9 @@ const fetchData = async (left = 0) => {
     
     if (requests.length !== left) {
         if (requests.length > 0) {
-            console.log(`There are ${requests.length} request(s) left to process.`);
+            console.log(`There are ${requests.length} request(s) left to process from AI Horde.`);
         } else {
-            console.log('There are no request to process.');
+            console.log('There are no request to process from AI Horde.');
         }
     }
 
@@ -59,12 +115,12 @@ const fetchData = async (left = 0) => {
 
             if (data.faulted) {
                 await db('requests').where({ id: request.id }).update({ status: RequestType.Faulted, editedAt: db.fn.now() });
-                console.log('Fault encountered during text generation.');
+                console.log('Fault encountered during text generation from AI Horde.');
                 continue;
             }
 
             if (data.done) {
-                console.log(`The request was successfully processed.`);
+                console.log(`The request was successfully processed from AI Horde.`);
                 await db('requests').where({ id: request.id }).update({ status: RequestType.Finished, editedAt: db.fn.now() });
 
                 const server = {
@@ -73,51 +129,12 @@ const fetchData = async (left = 0) => {
                     message: request.message,
                     content: data.generations[0].text.replace('<|endoftext|>', '').split(new RegExp(`\\n(?:You:|${params.tag}:|END_OF_DIALOG)`))[0].trim()
                 };
-    
-                if (params.inspect) {
-                    console.log(server);
-                }
 
-                let text = server.content;
-                text = text.charAt(0).toUpperCase() + text.slice(1);
-    
-                const channel = await client.channels.fetch(server.channel).catch(() => null);
-    
-                let message;
-                try {
-                    message = await channel.messages.fetch(server.message);
-                } catch {
-                    await db('messages').where({ id: server.message }).del();
-                    continue;
-                }
-    
-                let response;
-                if (channel.type === ChannelType.DM) {
-                    try {
-                        response = await channel.send(text);
-                    } catch {
-                        continue;
-                    }
-                } else {
-                    try {
-                        response = await message.reply(text);
-                    } catch {
-                        const user = await client.users.fetch(server.user).catch(() => null);
-                        if (!user) continue;
-    
-                        try {
-                            response = await user.send(text);
-                        } catch {
-                            continue;
-                        }
-                    }
-                }
-    
-                await db('messages').insert({ id: response.id, bot: 1, user: server.user, content: server.content });
+                await sendResponse(server);
             }
         } catch {
             await db('requests').where({ id: request.id }).update({ status: RequestType.Faulted, editedAt: db.fn.now() });
-            console.log('Fault encountered during text generation.');
+            console.log('Fault encountered during text generation from AI Horde.');
         }
     }
 
@@ -199,23 +216,66 @@ client.on(Events.MessageCreate, async (message) => {
     };
 
     if (params.inspect) {
-        console.log(payload);
+        console.log(params.endpoint ? { prompt, ...payload.params } : payload);
     }
 
-    try {
-        const { data } = await axios.post(`https://stablehorde.net/api/v2/generate/text/async`, payload, {
-            headers: {
-                'Content-Type': 'application/json',
-                'apikey': horde.api || '0000000000'
+    if (params.endpoint) {
+        console.log('A new request has been added for processing to endpoint.');
+
+        tasks.push(async () => {
+            try {
+                const response = await axios.post(`${params.endpoint}/api/v1/generate`, { prompt, ...payload.params }, { headers: { 'Content-Type': 'application/json' } });
+    
+                if (response.status === 200) {
+                    console.log(`The request was successfully processed from endpoint.`);
+    
+                    const server = {
+                        user: message.author.id,
+                        channel: message.channel.id,
+                        message: message.id,
+                        content: response.data.results[0].text.replace('<|endoftext|>', '').split(new RegExp(`\\n(?:You:|${params.tag}:|END_OF_DIALOG)`))[0].trim()
+                    };
+    
+                    await sendResponse(server);
+                } else {
+                    console.log('Fault encountered during text generation from endpoint.');
+                }
+            } catch {
+                console.log('The request was not processed from endpoint due to an error.');
+
+                try {
+                    const { data } = await axios.post(`https://stablehorde.net/api/v2/generate/text/async`, payload, {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'apikey': horde.api || '0000000000'
+                        }
+                    });
+
+                    if (data.id) {
+                        await db('requests').insert({ id: data.id, user: message.author.id, channel: message.channel.id, message: message.id });
+                        console.log('The request has been moved for processing to AI Horde.');
+                    }
+                } catch {
+                    console.log('The request was not moving for processing to AI Horde due to an error.')
+                }
             }
         });
-
-        if (data.id) {
-            await db('requests').insert({ id: data.id, user: message.author.id, channel: message.channel.id, message: message.id });
-            console.log('A new request has been added for processing.');
+    } else {
+        try {
+            const { data } = await axios.post(`https://stablehorde.net/api/v2/generate/text/async`, payload, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'apikey': horde.api || '0000000000'
+                }
+            });
+    
+            if (data.id) {
+                await db('requests').insert({ id: data.id, user: message.author.id, channel: message.channel.id, message: message.id });
+                console.log('A new request has been added for processing to AI Horde.');
+            }
+        } catch {
+            console.log('The new request was not added for processing to AI Horde due to an error.');
         }
-    } catch {
-        console.log('The new request was not added for processing due to an error.');
     }
 });
 
@@ -248,7 +308,19 @@ client.on(Events.ClientReady, async () => {
     const { users, messages } = await db('users').select(db.raw('COUNT(id) AS users, (SELECT COUNT(id) FROM messages WHERE bot = 1) AS messages')).first();
     console.log(`${params.tag} has already sent ${messages} message(s) to ${users} user(s) on ${client.guilds.cache.size} server(s).`);
 
-    await fetchData();
+    fetchData();
+
+    if (params.endpoint) {
+        const matches = params.endpoint.match(/^(https?:)\/\/([^:/]+)(?::(\d+))?/);
+        if (matches) {
+            const [, protocol, hostname, port] = matches;
+            params.endpoint = `${protocol}//${hostname}${port ? `:${port}` : ''}`;
+        } else {
+            params.endpoint = null;
+        }
+
+        processTask();
+    }
 });
 
 if (bot.token) {

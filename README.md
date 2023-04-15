@@ -58,7 +58,7 @@ Name | Description
 `api` | Create your API key [here](https://stablehorde.net/register) or leave it blank to login anonymously.
 `max_context_length` | Maximum number of tokens to send to the model.
 `max_length` | Number of tokens to generate.
-`rep_pen` | Base repetition penalty value
+`rep_pen` | Base repetition penalty value.
 `rep_pen_range` | Repetition penalty range.
 `rep_pen_slope` | Repetition penalty slope.
 `temperature` | Temperature value.
@@ -71,11 +71,13 @@ Name | Description
 
 Use the following command, where `Clyde` is the name of your config file from `bots` directory:
 ```
-npm start -- --tag=Clyde --inspect
+npm start -- --tag=Clyde --inspect --endpoint=http://127.0.0.1:5000
 ```
 `--inspect` is optional, it displays information about sent payload and received response in console.
+`--endpoint` is optional, allows self-hosting instead of sending a request to AI Horde.
 
-* You can run multiple Discord bots by specifying different tags and configuration files with parameters on the same package.
+* If endpoint is reachable, requests are processed on your endpoint otherwise requests are moved to AI Horde.
+* You can run multiple bots by specifying different configuration files with parameters on the same package.
 * For each configuration file, a separate SQLite3 database is created for the bot in the `databases` directory.
 * Existing requests in the queue for processing are checked against the API with an interval of at least 4 seconds.
 
